@@ -43,6 +43,35 @@ VARIATOR_MAP: dict[ReportType, type[BaseVariator]] = {
 }
 
 
+def _type_label_for_filename(report_type: ReportType) -> str:
+    """Map internal report type enum to the requested human-readable label."""
+    return "type A" if report_type == ReportType.TYPE_1 else "type B"
+
+
+def _resolve_final_output_path(
+    input_path: Path,
+    output_path: Path,
+    report_type: ReportType,
+) -> Path:
+    """
+    Build the final output path using:
+    - output directory from *output_path*
+    - filename pattern: "type A|B - <input_stem>.pdf"
+
+    If *output_path* points to a directory (existing or suffix-less), that
+    directory is used directly; otherwise its parent directory is used.
+    """
+    if output_path.exists() and output_path.is_dir():
+        out_dir = output_path
+    elif output_path.suffix:
+        out_dir = output_path.parent
+    else:
+        out_dir = output_path
+
+    final_name = f"{_type_label_for_filename(report_type)} - {input_path.stem}.pdf"
+    return out_dir / final_name
+
+
 # ---------------------------------------------------------------------------
 # Core processing function (public API)
 # ---------------------------------------------------------------------------
@@ -116,11 +145,12 @@ def process(
 
     # Step 5 – Generate output PDF
     logger.info("Step 5: Generating output PDF …")
+    final_output_path = _resolve_final_output_path(input_path, output_path, detected_type)
     builder = ReportBuilder()
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    builder.build(varied_table, str(output_path), detected_type)
+    final_output_path.parent.mkdir(parents=True, exist_ok=True)
+    builder.build(varied_table, str(final_output_path), detected_type)
 
-    logger.info("=== Done. Output: %s ===", output_path)
+    logger.info("=== Done. Output: %s ===", final_output_path)
     return detected_type
 
 
@@ -143,7 +173,10 @@ def cli(argv: list[str] | None = None) -> None:
         "--output", "-o",
         required=True,
         metavar="OUTPUT",
-        help="Destination path for the varied output PDF.",
+        help=(
+            "Destination directory (or file path whose parent will be used). "
+            "Final filename is auto-generated as 'type A|B - <input_name>.pdf'."
+        ),
     )
     parser.add_argument(
         "--seed", "-s",
@@ -194,7 +227,12 @@ def cli(argv: list[str] | None = None) -> None:
             tesseract_cmd=args.tesseract,
             poppler_path=args.poppler,
         )
-        print(f"Done. Report type: {detected.value}. Output: {args.output}")
+        final_output_path = _resolve_final_output_path(
+            input_path=Path(args.input),
+            output_path=Path(args.output),
+            report_type=detected,
+        )
+        print(f"Done. Report type: {detected.value}. Output: {final_output_path}")
     except Exception as exc:
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)

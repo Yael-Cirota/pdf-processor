@@ -18,7 +18,11 @@ Step 3 – Structural heuristic
     Count unique non-empty employee_name values across rows.
     > 1 unique name → TYPE_2
 
-Step 4 – Default fallback → TYPE_1
+Step 4 – OCR-noise fallback heuristic
+    If headers/col_map are unusable, infer TYPE_2 when many rows contain
+    multiple pipe-like separators (a pattern common in TYPE_2 scans).
+
+Step 5 – Default fallback → TYPE_1
 """
 from __future__ import annotations
 
@@ -72,6 +76,23 @@ def classify(table: ParsedTable) -> ReportType:
             "Classifier → TYPE_2 (heuristic: %d unique employee names)", len(unique_names)
         )
         return ReportType.TYPE_2
+
+    # Step 4 – OCR-noise fallback
+    # In some scans, headers are unreadable and col_map remains empty.
+    # TYPE_2 layouts often produce many OCR cells containing pipe separators.
+    if table.rows:
+        pipe_heavy_rows = sum(
+            1
+            for row in table.rows
+            if sum(1 for cell in row.raw_row if "|" in cell) >= 3
+        )
+        pipe_ratio = pipe_heavy_rows / len(table.rows)
+        if not col_map and len(table.rows) >= 20 and pipe_ratio >= 0.4:
+            logger.info(
+                "Classifier → TYPE_2 (fallback: pipe-heavy OCR pattern, ratio=%.2f)",
+                pipe_ratio,
+            )
+            return ReportType.TYPE_2
 
     logger.info("Classifier → TYPE_1 (default fallback)")
     return ReportType.TYPE_1
