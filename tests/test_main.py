@@ -25,6 +25,7 @@ from pdf_project.variation import (
 from pdf_project.models import ParsedTable, ReportType, TimeEntry
 from pdf_project.classifier import classify
 from pdf_project.generator import rtl
+from pdf_project.main import _normalise_table_headers
 
 
 # ===========================================================================
@@ -232,6 +233,54 @@ class TestClassifier(unittest.TestCase):
     def test_classify_type1_fallback(self):
         table = ParsedTable(col_map={}, rows=[])
         self.assertEqual(classify(table), ReportType.TYPE_1)
+
+
+# ===========================================================================
+# Header normalisation
+# ===========================================================================
+
+class TestHeaderNormalisation(unittest.TestCase):
+
+    def test_type1_headers_are_canonical(self):
+        table = ParsedTable(
+            headers=["תזיך", "כנסה", "יצא", "סהק"],
+            col_map={"date": 0, "entry": 1, "exit": 2, "daily_total": 3},
+            rows=[
+                TimeEntry(date="01/04/2025", entry="08:00", exit="17:00", daily_total="09:00")
+            ],
+            metadata={},
+        )
+        normalized = _normalise_table_headers(table, ReportType.TYPE_1)
+        self.assertEqual(normalized.headers, ["תאריך", "כניסה", "יציאה", 'סה"כ'])
+        self.assertEqual(
+            normalized.col_map,
+            {"date": 0, "entry": 1, "exit": 2, "daily_total": 3},
+        )
+
+    def test_type2_headers_are_canonical(self):
+        table = ParsedTable(
+            headers=["שם", "תאריך", "שעת כניסה", "שעת יציאה", "שעות"],
+            col_map={"employee_name": 0, "date": 1, "entry": 2, "exit": 3, "daily_total": 4},
+            rows=[
+                TimeEntry(
+                    employee_name="ישראל ישראלי",
+                    date="01/04/2025",
+                    entry="08:00",
+                    exit="17:00",
+                    daily_total="09:00",
+                )
+            ],
+            metadata={},
+        )
+        normalized = _normalise_table_headers(table, ReportType.TYPE_2)
+        self.assertEqual(
+            normalized.headers,
+            ["תאריך", "יום בשבוע", "שעת כניסה", "שעת יציאה", 'סה"כ שעות', "הערות"],
+        )
+        self.assertEqual(
+            normalized.col_map,
+            {"date": 0, "weekday": 1, "entry": 2, "exit": 3, "daily_total": 4, "notes": 5},
+        )
 
 
 # ===========================================================================

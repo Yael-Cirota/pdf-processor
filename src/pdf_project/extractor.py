@@ -60,7 +60,6 @@ _SPECIAL_KEYWORDS = {
     "holiday", "sick", "absent", "vacation",
 }
 
-
 class TableExtractor:
     """
     Extracts a ParsedTable from a list of page images and their OCR data.
@@ -141,41 +140,64 @@ class TableExtractor:
 
         try:
             doc = Img2Img(src=tmp_path)
-            tables = doc.extract_tables(
-                implicit_rows=True,
-                borderless_tables=True,
-            )
+            table_candidates = []
+            # Different scans behave better with different detection modes.
+            configs = [
+                {"implicit_rows": True, "borderless_tables": True},
+                {"implicit_rows": True, "borderless_tables": False},
+                {"implicit_rows": False, "borderless_tables": False},
+            ]
+            for cfg in configs:
+                try:
+                    extracted = doc.extract_tables(**cfg)
+                    for t in extracted:
+                        table_candidates.append((t, cfg))
+                except Exception:
+                    logger.debug("Table extraction mode failed: %s", cfg, exc_info=True)
         finally:
             os.unlink(tmp_path)
 
-        if not tables:
+        if not table_candidates:
             logger.warning("No table detected on page %d.", page_idx + 1)
             return [], [], []
 
-        # Use the largest detected table
-        table = max(tables, key=lambda t: len(t.content))
+        best_payload: tuple[list[list[str]], list[int], list[int]] | None = None
+        best_score = (-1, -1, -1)
 
-        raw_rows: list[list[str]] = []
-        col_widths: list[int] = []
-        row_heights: list[int] = []
+        for table, cfg in table_candidates:
+            raw_rows: list[list[str]] = []
+            col_widths: list[int] = []
+            row_heights: list[int] = []
 
-        for row_idx, row in enumerate(table.content.values()):
-            row_cells: list[str] = []
-            for col_idx, cell in enumerate(row):
-                # Map OCR words into this cell by bounding-box overlap
-                cell_text = _words_in_bbox(
-                    words,
-                    bbox=(cell.bbox.x1, cell.bbox.y1, cell.bbox.x2, cell.bbox.y2),
-                )
-                row_cells.append(cell_text)
-                if row_idx == 0:
-                    col_widths.append(cell.bbox.x2 - cell.bbox.x1)
-            if row_idx < len(table.content):
-                first_cell = list(row)[0]
-                row_heights.append(first_cell.bbox.y2 - first_cell.bbox.y1)
-            raw_rows.append(row_cells)
+            for row_idx, row in enumerate(table.content.values()):
+                row_cells: list[str] = []
+                for cell in row:
+                    # Map OCR words into this cell by bounding-box overlap
+                    cell_text = _words_in_bbox(
+                        words,
+                        bbox=(cell.bbox.x1, cell.bbox.y1, cell.bbox.x2, cell.bbox.y2),
+                    )
+                    row_cells.append(cell_text)
+                    if row_idx == 0:
+                        col_widths.append(cell.bbox.x2 - cell.bbox.x1)
+                if row:
+                    first_cell = list(row)[0]
+                    row_heights.append(first_cell.bbox.y2 - first_cell.bbox.y1)
+                raw_rows.append(row_cells)
 
-        return raw_rows, col_widths, row_heights
+            non_empty_rows = sum(1 for r in raw_rows if any(c.strip() for c in r))
+            non_empty_cells = sum(1 for r in raw_rows for c in r if c.strip())
+            score = (non_empty_rows, non_empty_cells, len(raw_rows))
+            if score > best_score:
+                best_score = score
+                best_payload = (raw_rows, col_widths, row_heights)
+                logger.debug("Selected better table candidate on page %d with cfg=%s score=%s", page_idx + 1, cfg, score)
+
+        if best_payload is None:
+            logger.warning("No usable table candidate on page %d.", page_idx + 1)
+            return [], [], []
+
+        return best_payload
 
     @staticmethod
     def _build_col_map(headers: list[str]) -> dict[str, int]:

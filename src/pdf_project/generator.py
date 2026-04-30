@@ -190,7 +190,7 @@ class ReportBuilder:
         story = []
 
         # --- Header block ---
-        story += self._build_header_block(table, styles)
+        story += self._build_header_block(table, styles, report_type)
         story.append(Spacer(1, 6 * mm))
 
         # --- Data table ---
@@ -207,7 +207,7 @@ class ReportBuilder:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_header_block(table: ParsedTable, styles: dict) -> list:
+    def _build_header_block(table: ParsedTable, styles: dict, report_type: ReportType) -> list:
         """Reconstruct the title / employee info block above the table."""
         meta = table.metadata
         elements = []
@@ -220,7 +220,82 @@ class ReportBuilder:
             if value:
                 elements.append(Paragraph(rtl(str(value)), styles["subtitle"]))
 
+        if report_type == ReportType.TYPE_2:
+            elements.append(Spacer(1, 2 * mm))
+            elements.extend(ReportBuilder._build_type2_top_summary(table, styles))
+
         return elements
+
+    @staticmethod
+    def _build_type2_top_summary(table: ParsedTable, styles: dict) -> list:
+        """Build the small top summary table shown in Type-2 forms."""
+        month_label = table.metadata.get("month_label", "")
+        if not month_label:
+            month_label = ReportBuilder._derive_month_label(table)
+
+        worked_rows = [r for r in table.rows if r.entry and r.exit and not r.is_special]
+        work_days = str(len(worked_rows))
+        monthly_hours = ReportBuilder._sum_duration_strings([r.daily_total for r in worked_rows])
+
+        hour_rate = str(table.metadata.get("hour_rate", ""))
+        payment_total = str(table.metadata.get("payment_total", ""))
+
+        employee_name = str(table.metadata.get("employee_name", ""))
+
+        band = Table(
+            [[
+                Paragraph(rtl(f"כרטיס עובד לחודש: {month_label}" if month_label else "כרטיס עובד לחודש:"), styles["cell_bold"])
+            ]],
+            colWidths=[100 * mm],
+            rowHeights=8 * mm,
+        )
+        band.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 1.0, colors.black),
+            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#BFBFBF")),
+            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ]))
+
+        summary_grid = [
+            [Paragraph(rtl(employee_name), styles["cell"]), Paragraph(rtl("שם העובד:"), styles["cell_bold"])],
+            [Paragraph(rtl(work_days), styles["cell"]), Paragraph(rtl('סה"כ ימי עבודה לחודש'), styles["cell_bold"])],
+            [Paragraph(rtl(monthly_hours), styles["cell"]), Paragraph(rtl('סה"כ שעות חודשיות'), styles["cell_bold"])],
+            [Paragraph(rtl(hour_rate), styles["cell"]), Paragraph(rtl("מחיר לשעה"), styles["cell_bold"])],
+            [Paragraph(rtl(payment_total), styles["cell"]), Paragraph(rtl('סה"כ לתשלום'), styles["cell_bold"])],
+        ]
+        summary = Table(summary_grid, colWidths=[30 * mm, 70 * mm], rowHeights=8 * mm)
+        summary.setStyle(TableStyle([
+            ("GRID", (0, 0), (-1, -1), 1.0, colors.black),
+            ("BACKGROUND", (1, 0), (1, -1), colors.HexColor("#E6E6E6")),
+            ("BACKGROUND", (0, 0), (0, -1), colors.white),
+            ("FONTNAME", (1, 0), (1, -1), _FONT_NAME_BOLD),
+            ("ALIGN", (0, 0), (-1, -1), "RIGHT"),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 6),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ]))
+
+        return [summary, Spacer(1, 2 * mm), band]
+
+    @staticmethod
+    def _derive_month_label(table: ParsedTable) -> str:
+        for row in table.rows:
+            if "/" in row.date:
+                parts = row.date.split("/")
+                if len(parts) >= 3 and parts[1].isdigit() and parts[2].isdigit():
+                    return f"{parts[1]}/{parts[2]}"
+        return ""
+
+    @staticmethod
+    def _sum_duration_strings(values: list[str]) -> str:
+        total = 0
+        for value in values:
+            if not value or ":" not in value:
+                continue
+            hh, mm = value.split(":", 1)
+            if hh.isdigit() and mm.isdigit():
+                total += int(hh) * 60 + int(mm)
+        return f"{total // 60:02d}:{total % 60:02d}"
 
     # ------------------------------------------------------------------
     # Data table
