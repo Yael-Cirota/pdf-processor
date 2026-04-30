@@ -10,7 +10,7 @@ structure and style.
 
 ```
 src/pdf_project/
-├── models.py       # ParsedTable, TimeEntry, ReportType
+├── models.py       # ParsedTable, AttendanceRow/TimeEntry, ReportType
 ├── ocr.py          # PDFScanner  – rasterise + OCR
 ├── extractor.py    # TableExtractor – grid detection + cell mapping
 ├── classifier.py   # classify()  – detect report type

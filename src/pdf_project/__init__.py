@@ -2,6 +2,7 @@
 pdf_project – Attendance report PDF variation generator.
 """
 from .models import ParsedTable, ReportType, TimeEntry
+from .models import AttendanceRow
 from .classifier import classify
 from .generator import rtl
 
@@ -12,6 +13,7 @@ from .generator import rtl
 __all__ = [
     "ParsedTable",
     "ReportType",
+    "AttendanceRow",
     "TimeEntry",
     "classify",
     "rtl",

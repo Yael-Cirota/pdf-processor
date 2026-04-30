@@ -59,6 +59,9 @@ _FONTS_REGISTERED = False
 _HEADER_FONT_SIZE = 13
 _BODY_FONT_SIZE = 10
 _ROW_HEIGHT = 7 * mm
+_TYPE2_HEADER_FONT_SIZE = 10
+_TYPE2_BODY_FONT_SIZE = 8
+_TYPE2_ROW_HEIGHT = 5 * mm
 _DEFAULT_COL_WIDTH = 25 * mm
 _TOTAL_ROW_BG = colors.HexColor("#D9E1F2")
 _ALT_ROW_BG = colors.HexColor("#F2F2F2")
@@ -69,7 +72,7 @@ _BORDER_COLOR = colors.HexColor("#4472C4")
 # Public helpers
 # ---------------------------------------------------------------------------
 
-def rtl(text: str) -> str:
+def rtl(text: str | None) -> str:
     """
     Prepare a Hebrew (or mixed Hebrew/digit) string for ReportLab rendering.
 
@@ -78,8 +81,8 @@ def rtl(text: str) -> str:
     2. bidi.algorithm.get_display() – reverse to visual RTL order
     """
     if not text:
-        return text
-    reshaped = arabic_reshaper.reshape(text)
+        return ""
+    reshaped = arabic_reshaper.reshape(str(text))
     return get_display(reshaped)
 
 
@@ -106,37 +109,42 @@ def _register_fonts() -> None:
     _FONTS_REGISTERED = True
 
 
-def _make_styles() -> dict[str, ParagraphStyle]:
+def _make_styles(compact: bool = False) -> dict[str, ParagraphStyle]:
     """Build ParagraphStyles for header block and table cells."""
     _register_fonts()
     base = getSampleStyleSheet()
+    header_size = _TYPE2_HEADER_FONT_SIZE if compact else _HEADER_FONT_SIZE
+    body_size = _TYPE2_BODY_FONT_SIZE if compact else _BODY_FONT_SIZE
+    title_leading = 13 if compact else 18
+    subtitle_leading = 11 if compact else 16
+    body_leading = 9 if compact else 12
     return {
         "title": ParagraphStyle(
             "title",
             fontName=_FONT_NAME_BOLD,
-            fontSize=_HEADER_FONT_SIZE + 2,
-            leading=18,
+            fontSize=header_size + (1 if compact else 2),
+            leading=title_leading,
             alignment=1,  # centre
         ),
         "subtitle": ParagraphStyle(
             "subtitle",
             fontName=_FONT_NAME,
-            fontSize=_HEADER_FONT_SIZE,
-            leading=16,
+            fontSize=header_size,
+            leading=subtitle_leading,
             alignment=1,
         ),
         "cell": ParagraphStyle(
             "cell",
             fontName=_FONT_NAME,
-            fontSize=_BODY_FONT_SIZE,
-            leading=12,
+            fontSize=body_size,
+            leading=body_leading,
             alignment=2,  # right (RTL)
         ),
         "cell_bold": ParagraphStyle(
             "cell_bold",
             fontName=_FONT_NAME_BOLD,
-            fontSize=_BODY_FONT_SIZE,
-            leading=12,
+            fontSize=body_size,
+            leading=body_leading,
             alignment=2,
         ),
     }
@@ -172,7 +180,8 @@ class ReportBuilder:
         report_type : used to pick layout tweaks specific to each type.
         """
         _register_fonts()
-        styles = _make_styles()
+        compact_type2 = report_type == ReportType.TYPE_2
+        styles = _make_styles(compact=compact_type2)
 
         # Page size from metadata if available, otherwise A4
         page_w = table.metadata.get("page_width_pt", A4[0])
@@ -181,17 +190,17 @@ class ReportBuilder:
         doc = SimpleDocTemplate(
             output_path,
             pagesize=(page_w, page_h),
-            rightMargin=15 * mm,
-            leftMargin=15 * mm,
-            topMargin=15 * mm,
-            bottomMargin=15 * mm,
+            rightMargin=(8 * mm if compact_type2 else 15 * mm),
+            leftMargin=(8 * mm if compact_type2 else 15 * mm),
+            topMargin=(8 * mm if compact_type2 else 15 * mm),
+            bottomMargin=(8 * mm if compact_type2 else 15 * mm),
         )
 
         story = []
 
         # --- Header block ---
         story += self._build_header_block(table, styles, report_type)
-        story.append(Spacer(1, 6 * mm))
+        story.append(Spacer(1, 3 * mm if compact_type2 else 6 * mm))
 
         # --- Data table ---
         story.append(self._build_data_table(table, styles, report_type))
@@ -221,7 +230,7 @@ class ReportBuilder:
                 elements.append(Paragraph(rtl(str(value)), styles["subtitle"]))
 
         if report_type == ReportType.TYPE_2:
-            elements.append(Spacer(1, 2 * mm))
+            elements.append(Spacer(1, 1 * mm))
             elements.extend(ReportBuilder._build_type2_top_summary(table, styles))
 
         return elements
@@ -247,7 +256,7 @@ class ReportBuilder:
                 Paragraph(rtl(f"כרטיס עובד לחודש: {month_label}" if month_label else "כרטיס עובד לחודש:"), styles["cell_bold"])
             ]],
             colWidths=[100 * mm],
-            rowHeights=8 * mm,
+            rowHeights=6 * mm,
         )
         band.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 1.0, colors.black),
@@ -263,7 +272,7 @@ class ReportBuilder:
             [Paragraph(rtl(hour_rate), styles["cell"]), Paragraph(rtl("מחיר לשעה"), styles["cell_bold"])],
             [Paragraph(rtl(payment_total), styles["cell"]), Paragraph(rtl('סה"כ לתשלום'), styles["cell_bold"])],
         ]
-        summary = Table(summary_grid, colWidths=[30 * mm, 70 * mm], rowHeights=8 * mm)
+        summary = Table(summary_grid, colWidths=[30 * mm, 70 * mm], rowHeights=6 * mm)
         summary.setStyle(TableStyle([
             ("GRID", (0, 0), (-1, -1), 1.0, colors.black),
             ("BACKGROUND", (1, 0), (1, -1), colors.HexColor("#E6E6E6")),
@@ -275,7 +284,7 @@ class ReportBuilder:
             ("LEFTPADDING", (0, 0), (-1, -1), 4),
         ]))
 
-        return [summary, Spacer(1, 2 * mm), band]
+        return [summary, Spacer(1, 1 * mm), band]
 
     @staticmethod
     def _derive_month_label(table: ParsedTable) -> str:
@@ -317,12 +326,12 @@ class ReportBuilder:
         data_grid = [header_cells]
 
         for row in table.rows:
-            cells = [Paragraph(rtl(c), styles["cell"]) for c in reversed(row.raw_row)]
             # Rebuild raw_row from TimeEntry fields so varied values are used
             cells = self._row_to_cells(row, table, styles)
             data_grid.append(cells)
 
-        t = Table(data_grid, colWidths=list(reversed(col_widths)), rowHeights=_ROW_HEIGHT)
+        row_height = _TYPE2_ROW_HEIGHT if report_type == ReportType.TYPE_2 else _ROW_HEIGHT
+        t = Table(data_grid, colWidths=list(reversed(col_widths)), rowHeights=row_height)
         t.setStyle(self._table_style(len(data_grid)))
         return t
 
@@ -336,7 +345,7 @@ class ReportBuilder:
 
         col_map = table.col_map
         n_cols = len(table.headers)
-        cells = list(row.raw_row) + [""] * n_cols   # pad to at least n_cols
+        cells = [(c or "") for c in row.raw_row] + [""] * n_cols   # pad to at least n_cols
 
         # Overwrite the varied fields into the correct column positions
         _override = {
@@ -349,7 +358,7 @@ class ReportBuilder:
         for key, value in _override.items():
             idx = col_map.get(key)
             if idx is not None and idx < len(cells):
-                cells[idx] = value
+                cells[idx] = value or ""
 
         cells = cells[:n_cols]
         return [Paragraph(rtl(c), styles["cell"]) for c in reversed(cells)]

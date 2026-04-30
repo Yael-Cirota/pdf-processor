@@ -33,6 +33,8 @@ from .extractor import TableExtractor
 from .generator import ReportBuilder
 from .models import ParsedTable, ReportType, TimeEntry
 from .ocr import PDFScanner
+from .parser import get_parser
+from .transformation import TransformationService
 from .variation import BaseVariator, Type1Variator, Type2Variator
 
 logger = logging.getLogger(__name__)
@@ -61,6 +63,8 @@ _CANONICAL_LAYOUTS: dict[ReportType, list[tuple[str, str]]] = {
         ("notes", "הערות"),
     ],
 }
+
+_TRANSFORMATION_SERVICE = TransformationService()
 
 
 def _type_label_for_filename(report_type: ReportType) -> str:
@@ -619,57 +623,8 @@ def _reconstruct_row_values(row: TimeEntry, report_type: ReportType) -> dict[str
 
 
 def _normalise_table_headers(table: ParsedTable, report_type: ReportType) -> ParsedTable:
-    """
-    Force a canonical header set and col_map for each report type.
-
-    This prevents OCR header noise from leaking into generated output and keeps
-    each report type visually consistent.
-    """
-    layout = _CANONICAL_LAYOUTS[report_type]
-    canonical_headers = [header for _, header in layout]
-    canonical_col_map = {key: idx for idx, (key, _) in enumerate(layout)}
-    source_col_map = dict(table.col_map)
-
-    normalized_rows: list[TimeEntry] = []
-    for row in table.rows:
-        reconstructed = _reconstruct_row_values(row, report_type)
-
-        def _canonical_value(key: str) -> str:
-            current = reconstructed.get(key, "")
-            if current:
-                return current
-
-            src_idx = source_col_map.get(key)
-            if src_idx is not None and src_idx < len(row.raw_row):
-                return row.raw_row[src_idx].strip()
-            return ""
-
-        canonical_raw = [
-            _canonical_value(key)
-            for key, _ in layout
-        ]
-
-        has_times = bool(reconstructed.get("entry") and reconstructed.get("exit"))
-        normalized_rows.append(
-            replace(
-                row,
-                date=reconstructed.get("date", row.date),
-                entry=reconstructed.get("entry", row.entry),
-                exit=reconstructed.get("exit", row.exit),
-                daily_total=reconstructed.get("daily_total", row.daily_total),
-                is_special=row.is_special and not has_times,
-                raw_row=canonical_raw,
-            )
-        )
-
-    # Keep rows as extracted from input; do not synthesize missing Type-2 dates.
-
-    return ParsedTable(
-        headers=canonical_headers,
-        rows=normalized_rows,
-        col_map=canonical_col_map,
-        metadata={**table.metadata, "canonical_headers": True},
-    )
+    """Backwards-compatible wrapper around the strategy-based transformation service."""
+    return _TRANSFORMATION_SERVICE.normalise_table_headers(table, report_type)
 
 
 # ---------------------------------------------------------------------------
@@ -737,20 +692,8 @@ def process(
 
     logger.info("Step 3: Report type → %s", detected_type.value)
 
-    if detected_type == ReportType.TYPE_2:
-        ocr_hints = _build_type2_row_hints_from_ocr(ocr_pages)
-        table = _apply_type2_row_hints(table, ocr_hints)
-        summary_meta = _extract_type2_summary_metadata_from_ocr(ocr_pages)
-        if summary_meta:
-            table = ParsedTable(
-                headers=table.headers,
-                rows=table.rows,
-                col_map=table.col_map,
-                metadata={**table.metadata, **summary_meta},
-            )
-
-    # Standardise table headers per type so output headers remain consistent.
-    table = _normalise_table_headers(table, detected_type)
+    parser = get_parser(detected_type, _TRANSFORMATION_SERVICE)
+    table = parser.parse(table, ocr_pages)
 
     # Step 4 – Variation (disabled: keep original times unchanged)
     logger.info("Step 4: Variation disabled; preserving original times.")

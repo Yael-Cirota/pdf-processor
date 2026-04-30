@@ -6,6 +6,7 @@ external binaries (Tesseract / Poppler) so they run offline.
 Integration tests that require a real PDF are skipped when no sample is present.
 """
 import unittest
+import shutil
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -22,10 +23,16 @@ from pdf_project.variation import (
     Type1Variator,
     Type2Variator,
 )
-from pdf_project.models import ParsedTable, ReportType, TimeEntry
+from pdf_project.models import AttendanceRow, ParsedTable, ReportType, TimeEntry
 from pdf_project.classifier import classify
 from pdf_project.generator import rtl
 from pdf_project.main import _normalise_table_headers
+from pdf_project.parser import BaseParser, get_parser
+from pdf_project.transformation import (
+    TransformationService,
+    Type1TransformationStrategy,
+    Type2TransformationStrategy,
+)
 
 
 # ===========================================================================
@@ -282,6 +289,97 @@ class TestHeaderNormalisation(unittest.TestCase):
             {"date": 0, "weekday": 1, "entry": 2, "exit": 3, "daily_total": 4, "notes": 5},
         )
 
+    def test_type2_optional_fields_can_be_none(self):
+        row = AttendanceRow(
+            employee_name="ישראל ישראלי",
+            date="01/04/2025",
+            entry="08:00",
+            exit="17:00",
+            daily_total="09:00",
+            break_minutes=None,
+            overtime_125_hours=None,
+            overtime_150_hours=None,
+            overtime_200_hours=None,
+            raw_row=["", "", "08:00", "17:00", "09:00", ""],
+        )
+        table = ParsedTable(
+            headers=["תאריך", "יום בשבוע", "שעת כניסה", "שעת יציאה", 'סה"כ שעות', "הערות"],
+            col_map={"date": 0, "weekday": 1, "entry": 2, "exit": 3, "daily_total": 4, "notes": 5},
+            rows=[row],
+            metadata={},
+        )
+
+        normalized = _normalise_table_headers(table, ReportType.TYPE_2)
+        self.assertEqual(normalized.rows[0].entry, "08:00")
+        self.assertEqual(normalized.rows[0].exit, "17:00")
+        self.assertEqual(normalized.rows[0].daily_total, "09:00")
+        self.assertEqual(len(normalized.rows[0].raw_row), 6)
+
+
+# ===========================================================================
+# Pattern tests – Strategy + Template Method
+# ===========================================================================
+
+class TestTransformationStrategies(unittest.TestCase):
+
+    def test_strategy_registry_returns_type1(self):
+        service = TransformationService()
+        strategy = service.strategy_for(ReportType.TYPE_1)
+        self.assertIsInstance(strategy, Type1TransformationStrategy)
+
+    def test_strategy_registry_returns_type2(self):
+        service = TransformationService()
+        strategy = service.strategy_for(ReportType.TYPE_2)
+        self.assertIsInstance(strategy, Type2TransformationStrategy)
+
+    def test_unknown_strategy_raises(self):
+        service = TransformationService(registry={})
+        with self.assertRaises(ValueError):
+            service.strategy_for(ReportType.TYPE_1)
+
+
+class TestParserTemplateMethod(unittest.TestCase):
+
+    def test_get_parser_registry(self):
+        parser = get_parser(ReportType.TYPE_1, TransformationService())
+        self.assertEqual(parser.report_type, ReportType.TYPE_1)
+
+    def test_get_parser_unknown_type_raises(self):
+        service = TransformationService()
+        with self.assertRaises(ValueError):
+            get_parser(MagicMock(name="unknown_type"), service)
+
+    def test_base_parser_parse_calls_hooks_in_order(self):
+        class StubParser(BaseParser):
+            report_type = ReportType.TYPE_1
+
+            def __init__(self, transformation_service):
+                super().__init__(transformation_service)
+                self.calls = []
+
+            def _is_header_line(self, row: TimeEntry) -> bool:
+                self.calls.append("is_header")
+                return False
+
+            def _parse_row(self, row: TimeEntry) -> TimeEntry:
+                self.calls.append("parse_row")
+                return row
+
+            def _parse_summary(self, table: ParsedTable, ocr_pages: list[list[dict]]) -> ParsedTable:
+                self.calls.append("parse_summary")
+                return table
+
+        parser = StubParser(TransformationService())
+        table = ParsedTable(
+            headers=["תאריך", "כניסה", "יציאה", 'סה"כ'],
+            col_map={"date": 0, "entry": 1, "exit": 2, "daily_total": 3},
+            rows=[TimeEntry(date="01/04/2025", entry="08:00", exit="17:00", daily_total="09:00")],
+            metadata={},
+        )
+
+        parser.parse(table, ocr_pages=[])
+        self.assertEqual(parser.calls, ["is_header", "parse_row", "parse_summary"])
+
 
 # ===========================================================================
 # RTL helper
@@ -319,8 +417,9 @@ class TestIntegration(unittest.TestCase):
 
     @unittest.skipUnless(
         any((_SAMPLE_DIR / "*.pdf").parent.exists() and
-            list(_SAMPLE_DIR.glob("*.pdf")) if _SAMPLE_DIR.exists() else []),
-        "No sample PDFs found in samples/ directory",
+            list(_SAMPLE_DIR.glob("*.pdf")) if _SAMPLE_DIR.exists() else [])
+        and shutil.which("tesseract") is not None,
+        "No sample PDFs found or tesseract is unavailable",
     )
     def test_full_pipeline(self):
         import tempfile, os
