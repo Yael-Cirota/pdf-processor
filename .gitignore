@@ -3,5 +3,6 @@ __pycache__/
 .env
 .venv
 .vscode/
+.output/*
 !output/.gitkeep
 *.egg-info/

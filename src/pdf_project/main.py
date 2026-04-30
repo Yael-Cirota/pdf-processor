@@ -720,8 +720,7 @@ def cli(argv: list[str] | None = None) -> None:
         description="Generate a logical variation of a scanned Hebrew attendance report PDF.",
     )
     parser.add_argument(
-        "--input", "-i",
-        required=True,
+        "input",
         metavar="INPUT",
         help="Path to the source attendance PDF.",
     )
